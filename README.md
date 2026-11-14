@@ -65,8 +65,85 @@ or from ACC's download folder - **no ASTRO files are distributed here**).
 
 Command line: `python a50_tool.py info | fix-base | fix-headset`.
 
-The tool only writes the two Avnera radio chips, verifies the image MD5 before writing, and never touches the MCUs.
+`a50_tool.py` only writes the two Avnera radio chips, verifies the image MD5 before writing, and never touches the MCUs.
 **Do not keep re-running the ACC update** - every attempt is another chance to break pairing.
+
+## A50 Control - replacement app for ACC (`app\`)
+
+An open-source, lightweight alternative to ASTRO Command Center: no login, no Logitech servers.
+
+- Status: battery, docked/on, base and headset firmware, radio chip health
+- Equalizer: 3 presets, 5 bands (-7..+7 dB), rename presets
+- Microphone: level, sidetone, noise gate (Streaming / Night / Home / Tournament), mic EQ
+- Mix: default game/voice balance, alert volume, stream port mix
+- **Save to headset** to keep settings after power-off
+- **Firmware**: update the headset from a local `.afw` file (see below)
+- Maintenance: Diagnose / Fix radio chips (the tool above, built in)
+- Settings: dark / light / system theme, accent color, headset look, collapsible sidebar
+
+### Run it
+
+- **Windows app (no Python needed):** download `A50 Control.exe` from the
+  [Releases](https://github.com/roccopioros06-code/a50-gen4-recovery/releases) page and double-click it.
+  It is not code-signed, so Windows SmartScreen may warn you: *More info* > *Run anyway*.
+- **From source:** double-click `app\A50 Control.bat` (installs `pywinusb`, `customtkinter` 5.2.2 and `pillow` if missing).
+- **Build the .exe yourself:** double-click `app\Build EXE.bat` (uses PyInstaller; output in `app\dist`).
+
+Close ACC first: only one program can talk to the base at a time.
+
+### Firmware update
+
+The **Firmware** page updates the headset like ACC does, but from a file **you provide**:
+
+> [!IMPORTANT]
+> **This project does not include or download any firmware.** Get the `.afw` file yourself, for example from your own
+> ACC installation (`%LOCALAPPDATA%\Astro Gaming\ASTRO Command Center\Astro A50 Wireless (Mimas)\FW\` or
+> `C:\Program Files (x86)\Astro Gaming\ASTRO Command Center\assets\forced_fw\`). The app finds it there automatically,
+> or you can pick any `.afw` with *Choose .afw file...*.
+
+- It shows the version of each chip in the file and on your device, and only writes what differs.
+- **Radio chips** (base TX_RADIO, headset RX_RADIO): tested.
+- **Processors** (base TX_MCU, headset RX_MCU): **experimental**, off by default. Each has been rewritten successfully
+  on one unit; enable *Include processors (experimental)* to use them.
+- Nothing else talks to the base while writing (the cause of ACC's failures), and each chip is retried from the start if a block fails.
+- **Pairing is never touched.**
+
+Same thing from the command line: `python tool\a50_update.py inspect FILE.afw` /
+`python tool\a50_update.py update FILE.afw [--only tx_radio,rx_radio] [--force] [--experimental]`.
+
+### Headset pictures (optional)
+
+Out of the box the Home page shows an **original drawing** of the headset. The app can also show a real photo of
+your A50 Gen 4, but **no product photos are included in this project**: they belong to Logitech / ASTRO Gaming,
+so you have to get them yourself. They stay on your PC and are never uploaded anywhere.
+
+The A50 Gen 4 exists in a **PlayStation / PC** and an **Xbox / PC** version (plus some special colorways), so use a
+picture of yours. Suggested file names, for example:
+
+| File name | Version |
+|---|---|
+| `PlayStation - black.png` | A50 Gen 4, PlayStation / PC version |
+| `Xbox - black gold.png` | A50 Gen 4, Xbox / PC version |
+
+How to add them:
+
+1. **Find the pictures.** Search for "ASTRO A50 Gen 4" on the official ASTRO Gaming / Logitech G website or on a
+   store page and save a front picture of your version (right-click > *Save image as*). A picture of your own
+   headset taken with your phone works too.
+2. **Remove the background** (optional, but it looks much better on the dark theme): on Windows 11 open the
+   picture in **Paint** and use *Remove background*, or use the *Photos* app or any background-remover tool.
+   Save it as **PNG** so the background stays transparent.
+3. **Rename it** with the name you want to see in the app, for example `Xbox - black gold.png`.
+   The file name (without `.png`) is the name shown in the model picker.
+4. **Put it in the pictures folder:** press `Win + R`, paste `%APPDATA%\A50Control\headsets` and press Enter,
+   then copy the PNG there. (The folder is created the first time you start the app. When running from source you
+   can also drop PNGs in `app\headsets`: they are copied there automatically.)
+5. **Restart A50 Control** and pick the picture with the **‹ ›** arrows on the Home page or in
+   *Settings > Headset look*. To use a JPG/WEBP/BMP as it is, use *Settings > Choose photo...* instead.
+
+To go back to the drawing, pick one of the "Drawing" entries. To remove a picture, delete it from the folder.
+
+Settings commands are based on [eh-fifty](https://github.com/tdryer/eh-fifty). Early version: feedback and issues welcome.
 
 ## Optional: ACC plugin (`plugin\`)
 

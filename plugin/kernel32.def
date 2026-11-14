@@ -1,0 +1,23 @@
+LIBRARY KERNEL32.dll
+EXPORTS
+LoadLibraryA@4
+GetProcAddress@8
+GetModuleHandleA@4
+GetSystemDirectoryA@8
+VirtualProtect@16
+CreateFileA@28
+CreateFileW@28
+WriteFile@20
+ReadFile@20
+GetOverlappedResult@16
+CloseHandle@4
+GetCurrentThreadId@0
+GetTickCount@0
+GetLocalTime@4
+SetLastError@4
+GetLastError@0
+GetEnvironmentVariableA@12
+InitializeCriticalSection@4
+EnterCriticalSection@4
+LeaveCriticalSection@4
+SetFilePointer@16

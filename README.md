@@ -74,11 +74,22 @@ An open-source, lightweight alternative to ASTRO Command Center: no login, no Lo
 
 - Status: battery, docked/on, base and headset firmware, radio chip health
 - Equalizer: 3 presets, 5 bands (-7..+7 dB), rename presets
-- Microphone: level, sidetone, noise gate (Streaming / Night / Home / Tournament), mic EQ
+- Microphone: level, sidetone, noise gate (Streaming / Night / Home / Tournament), mic EQ, **quick setups**
+  (Chat, Competitive, Streaming, Late night, Noisy room, or your own) and a **mic test** (live level meter,
+  live frequency analyser, record 5 s and play back; audio never leaves your PC)
+- **PC mic EQ** (optional, needs the free [Equalizer APO](https://sourceforge.net/projects/equalizerapo/)):
+  Razer-style 10-band EQ for your voice with presets (Clear voice, Broadcast, Warm, Less boomy, Softer S,
+  Weak mic), preamp and low cut. Only the A50 voice input is touched; your other Equalizer APO settings stay as they are.
 - Mix: default game/voice balance, alert volume, stream port mix
 - **Save to headset** to keep settings after power-off
 - **Firmware**: update the headset from a local `.afw` file (see below)
 - Maintenance: Diagnose / Fix radio chips (the tool above, built in)
+- **Game profiles**: ready-made EQ curves for popular games (CoD/Warzone, Valorant, CS2, Siege, Apex, Fortnite,
+  racing, music...), editable and shareable, with **automatic switching** when a game starts. A profile can
+  also switch the **microphone setup** (e.g. Competitive mic for shooters), and everything goes back when the game closes
+- **Keyboard shortcuts** that work in games: Ctrl+Alt+1/2/3 EQ preset, Ctrl+Alt+P next profile, Ctrl+Alt+M next mic setup,
+  Ctrl+Alt+B battery
+- **Battery history**: 24 h chart, time left / time to full, typical hours per charge
 - **Tray icon** with the battery level, low-battery alert, start with Windows
 - **Backup / restore** of all settings (also automatic before firmware updates)
 - **Diagnostic report** to attach when you ask for help
@@ -89,7 +100,7 @@ An open-source, lightweight alternative to ASTRO Command Center: no login, no Lo
 - **Windows app (no Python needed):** download `A50 Control.exe` from the
   [Releases](https://github.com/roccopioros06-code/a50-gen4-recovery/releases) page and double-click it.
   It is not code-signed, so Windows SmartScreen may warn you: *More info* > *Run anyway*.
-- **From source:** double-click `app\A50 Control.bat` (installs `pywinusb`, `customtkinter` 5.2.2, `pillow` and `pystray` if missing).
+- **From source:** double-click `app\A50 Control.bat` (installs `pywinusb`, `pillow` and `pystray` if missing; the window needs Microsoft Edge, already on Windows 10/11).
 - **Build the .exe yourself:** double-click `app\Build EXE.bat` (uses PyInstaller; output in `app\dist`).
 
 Close ACC first: only one program can talk to the base at a time.
@@ -114,39 +125,20 @@ The **Firmware** page updates the headset like ACC does, but from a file **you p
 Same thing from the command line: `python tool\a50_update.py inspect FILE.afw` /
 `python tool\a50_update.py update FILE.afw [--only tx_radio,rx_radio] [--force] [--experimental]`.
 
-### Headset pictures (optional)
+### Look and colours
 
-Out of the box the Home page shows an **original drawing** of the headset. The app can also show a real photo of
-your A50 Gen 4, but **no product photos are included in this project**: they belong to Logitech / ASTRO Gaming,
-so you have to get them yourself. They stay on your PC and are never uploaded anywhere.
+The window is drawn with HTML/CSS inside **Microsoft Edge in app mode** (already part of Windows 10/11: no address
+bar, no extra install). The app itself only listens on `127.0.0.1` with a random port and a secret token, so
+nothing outside your PC can reach it.
 
-The A50 Gen 4 exists in a **PlayStation / PC** and an **Xbox / PC** version (plus some special colorways), so use a
-picture of yours. Suggested file names, for example:
-
-| File name | Version |
-|---|---|
-| `PlayStation - black.png` | A50 Gen 4, PlayStation / PC version |
-| `Xbox - black gold.png` | A50 Gen 4, Xbox / PC version |
-
-How to add them:
-
-1. **Find the pictures.** Search for "ASTRO A50 Gen 4" on the official ASTRO Gaming / Logitech G website or on a
-   store page and save a front picture of your version (right-click > *Save image as*). A picture of your own
-   headset taken with your phone works too.
-2. **Remove the background** (optional, but it looks much better on the dark theme): on Windows 11 open the
-   picture in **Paint** and use *Remove background*, or use the *Photos* app or any background-remover tool.
-   Save it as **PNG** so the background stays transparent.
-3. **Rename it** with the name you want to see in the app, for example `Xbox - black gold.png`.
-   The file name (without `.png`) is the name shown in the model picker.
-4. **Put it in the pictures folder:** press `Win + R`, paste `%APPDATA%\A50Control\headsets` and press Enter,
-   then copy the PNG there. (The folder is created the first time you start the app. When running from source you
-   can also drop PNGs in `app\headsets`: they are copied there automatically.)
-5. **Restart A50 Control** and pick the picture with the **‹ ›** arrows on the Home page or in
-   *Settings > Headset look*. To use a JPG/WEBP/BMP as it is, use *Settings > Choose photo...* instead.
-
-To go back to the drawing, pick one of the "Drawing" entries. To remove a picture, delete it from the folder.
+The Home page shows an **original drawing** of a headset on its base station: the base lights show the active EQ
+preset (1/2/3) and the battery level. In *Settings > Colours* you can pick any colour for the app, the headset
+lights, the shell and the cushions. No product photos are used or included.
 
 Settings commands are based on [eh-fifty](https://github.com/tdryer/eh-fifty). Early version: feedback and issues welcome. Planned updates: [ROADMAP.md](ROADMAP.md).
+
+Built with the help of an AI assistant (Claude). Every feature was tested on my own A50 Gen 4 before release.
+If something doesn't work on yours, please open an issue with the diagnostic report (*Maintenance > Diagnostic report*).
 
 ## Optional: ACC plugin (`plugin\`)
 

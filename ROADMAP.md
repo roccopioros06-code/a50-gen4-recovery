@@ -22,23 +22,40 @@ Legend: ✅ done · 🔨 in progress · 📋 planned · 🔬 needs research / te
 - ✅ Firmware page: progress bar per chip, collapsible log
 - ✅ Reconnects by itself when the base is unplugged and plugged back
 
-## v0.3.0 - Game profiles 📋🔬
+## v0.3.0 - Game profiles and new interface ✅
 
-- 🔬 **Write EQ band frequency and bandwidth** (capture the command with the ACC plugin's HID log)
-- 📋 **Import / export ACC EQ files**, so community presets work directly
-- 📋 **Profile library** for popular games (Warzone / CoD, Valorant, CS2, Fortnite, Apex, Siege, racing, music, movies)
-- 📋 **Automatic profile switching** when a game starts (by process name), back to the previous one when it closes
-- 📋 Share your own profiles as files
+- ✅ **Profile library** for popular games (CoD / Warzone, Valorant, CS2, Siege, Apex, Fortnite, PUBG, Overwatch,
+  Battlefield, racing, sports, open world, music, movies, voice)
+- ✅ Every profile can be **edited** (saved as your version, with reset to default) or you can make **your own**
+- ✅ **Automatic switching** when a game starts (by program name), previous EQ restored when it closes
+- ✅ **Export / import** profiles as files to share them
+- ✅ **Microphone quick setups** (Chat, Competitive, Streaming, Late night, Noisy room) plus your own
+- ✅ **Mic test**: live level meter with hints, live frequency analyser, record 5 seconds and play back
+- ✅ **Game scenes**: a game profile can also switch the microphone setup, restored when the game closes
+- ✅ **Keyboard shortcuts** that work in games (EQ preset, next profile, next mic setup, battery)
+- ✅ **Battery history**: 24 h chart, time left / to full, typical hours per charge
+- ✅ **PC mic EQ** through Equalizer APO: 10 bands, presets, preamp, low cut, your own profiles
+- ✅ **New interface**: redesigned from scratch (drag-to-edit EQ curves, drawn headset and base station with live
+  preset and battery lights, free colour picker for app, lights, shell and cushions)
+- ✅ **Headset mic EQ compare tool**: records you with each of the 3 headset mic presets and plays them back
 
-## v0.4.0 - Pairing repair 🔬
+## v0.4.0 - Microphone, frequencies and languages 📋
+
+- 📋 **Guided Equalizer APO setup** inside the app (download, install, pick the A50 mic, restart) and a check that
+  the PC mic EQ is really active on the A50 microphone
+- 🔬 **Change the EQ band frequencies and width** (e.g. 80 Hz → 100 Hz; capture the command with the ACC plugin's HID log)
+- 📋 **Headset mic EQ presets** with meaningful names instead of "Preset 0/1/2"
+- 📋 **Languages**: English, Italian, Portuguese, Spanish
+- 📋 **Import ACC EQ files**, so community presets work directly
+
+## v0.5.0 - Pairing repair 🔬
 
 - 🔬 **Re-pair base and headset** (commands `0x5B` / `0xFC` identified, not implemented) for units where both radio
   chips are at 43 but the headset still won't connect
 - 🔬 Processors (TX_MCU / RX_MCU) out of "experimental" once confirmed on more units
 
-## v0.5.0 - Polish 📋
+## v0.6.0 - Polish 📋
 
-- 📋 Languages: English, Italian, Portuguese, Spanish
 - 📋 "New version available" notice (checks this repo's Releases only, never downloads firmware)
 
 ## Later / research 🔬

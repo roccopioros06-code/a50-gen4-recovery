@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A50 Control</title>
+<link rel="icon" href="a50_control.ico">
+<link rel="stylesheet" href="app.css">
+<script>window.A50_TOKEN = "__TOKEN__";</script>
+</head>
+<body>
+<div class="app">
+  <div class="glow" aria-hidden="true" style="width:520px;height:520px;right:-140px;top:-160px;background:rgba(var(--accr),.26)"></div>
+  <div class="glow" aria-hidden="true" style="width:460px;height:460px;left:180px;bottom:-220px;background:rgba(124,92,255,.18)"></div>
+
+  <aside class="side">
+    <div class="logo">
+      <div class="logo-ic" data-ic="home" data-ic-size="22" data-ic-sw="2.2"></div>
+      <div class="col"><span class="h" style="font-size:16px;font-weight:700">A50 Control</span><span class="small muted" id="ver">open source</span></div>
+    </div>
+    <div class="sep"></div>
+    <nav class="nav" id="nav" aria-label="Sections"></nav>
+    <div style="flex:1"></div>
+    <div class="mini" id="mini">
+      <div class="row sp"><span class="k" style="color:var(--acc-tx)">Headset</span><span class="dot off" id="mini-dot"></span></div>
+      <div class="h" style="font-size:22px;font-weight:700;margin-top:6px" id="mini-pct">–</div>
+      <div class="track" style="height:6px;margin-top:8px;cursor:default"><div class="fill" id="mini-fill" style="width:0"></div></div>
+      <div class="small soft" style="margin-top:8px" id="mini-txt">Not connected</div>
+    </div>
+    <nav class="nav" id="nav2" aria-label="Settings"></nav>
+  </aside>
+
+  <main id="main">
+    <header class="top">
+      <div><div class="k" style="color:var(--acc);letter-spacing:.32em">A50 Control</div>
+        <div class="h" style="font-size:28px;font-weight:700;margin-top:4px">A50 Wireless Gen 4</div></div>
+      <div class="row wrap" style="gap:10px">
+        <span class="chip" id="auto-chip" hidden></span>
+        <span class="chip" id="conn-chip"><span class="dot off"></span><span>Searching…</span></span>
+        <span class="chip" id="bat-chip" hidden></span>
+        <button class="btn" type="button" id="btn-reload"></button>
+        <button class="btn btn-p" type="button" id="btn-save"></button>
+      </div>
+    </header>
+    <div class="topline"></div>
+    <div class="banner hide" id="banner"></div>
+    <div id="pages"></div>
+  </main>
+</div>
+<div id="toasts" aria-live="polite"></div>
+<div class="modal" id="modal" role="dialog" aria-modal="true"><div class="card" id="modal-card"></div></div>
+<input type="file" id="file-in" hidden>
+<script src="app.js"></script>
+</body>
+</html>

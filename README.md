@@ -143,7 +143,7 @@ How to add them:
 
 To go back to the drawing, pick one of the "Drawing" entries. To remove a picture, delete it from the folder.
 
-Settings commands are based on [eh-fifty](https://github.com/tdryer/eh-fifty). Early version: feedback and issues welcome.
+Settings commands are based on [eh-fifty](https://github.com/tdryer/eh-fifty). Early version: feedback and issues welcome. Planned updates: [ROADMAP.md](ROADMAP.md).
 
 ## Optional: ACC plugin (`plugin\`)
 

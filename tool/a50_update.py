@@ -60,6 +60,17 @@ def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
+PROGRESS = None  # optional callback(component, done, total) set by the A50 Control app
+
+
+def progress(key, done, total):
+    if PROGRESS:
+        try:
+            PROGRESS(key, done, total)
+        except Exception:
+            pass
+
+
 # --------------------------------------------------------------------------- .afw
 def read_afw(path):
     """Return {component: (version, bytes)} and the release notes text."""
@@ -204,6 +215,8 @@ def write_component(link, key, data):
             ok = True
         if not ok:
             raise RuntimeError(f"aborted at block {i + 1}/{len(blocks)}: {why}")
+        if (i + 1) % 20 == 0 or i + 1 == len(blocks):
+            progress(key, i + 1, len(blocks))
         if (i + 1) % 500 == 0 or i + 1 == len(blocks):
             log(f"  {i + 1}/{len(blocks)} blocks ({100 * (i + 1) // len(blocks)}%)")
     if tolerated:

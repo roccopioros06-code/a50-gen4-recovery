@@ -79,6 +79,9 @@ An open-source, lightweight alternative to ASTRO Command Center: no login, no Lo
 - **Save to headset** to keep settings after power-off
 - **Firmware**: update the headset from a local `.afw` file (see below)
 - Maintenance: Diagnose / Fix radio chips (the tool above, built in)
+- **Tray icon** with the battery level, low-battery alert, start with Windows
+- **Backup / restore** of all settings (also automatic before firmware updates)
+- **Diagnostic report** to attach when you ask for help
 - Settings: dark / light / system theme, accent color, headset look, collapsible sidebar
 
 ### Run it
@@ -86,7 +89,7 @@ An open-source, lightweight alternative to ASTRO Command Center: no login, no Lo
 - **Windows app (no Python needed):** download `A50 Control.exe` from the
   [Releases](https://github.com/roccopioros06-code/a50-gen4-recovery/releases) page and double-click it.
   It is not code-signed, so Windows SmartScreen may warn you: *More info* > *Run anyway*.
-- **From source:** double-click `app\A50 Control.bat` (installs `pywinusb`, `customtkinter` 5.2.2 and `pillow` if missing).
+- **From source:** double-click `app\A50 Control.bat` (installs `pywinusb`, `customtkinter` 5.2.2, `pillow` and `pystray` if missing).
 - **Build the .exe yourself:** double-click `app\Build EXE.bat` (uses PyInstaller; output in `app\dist`).
 
 Close ACC first: only one program can talk to the base at a time.

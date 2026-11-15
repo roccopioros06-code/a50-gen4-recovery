@@ -13,13 +13,14 @@ Legend: ✅ done · 🔨 in progress · 📋 planned · 🔬 needs research / te
 - ✅ Firmware update from a local `.afw` file (radio chips tested, processors experimental, pairing untouched)
 - ✅ Standalone `A50 Control.exe` (no Python needed)
 
-## v0.2.0 - Everyday use 📋
+## v0.2.0 - Everyday use ✅
 
-- 📋 **Tray icon** with battery %, low-battery notification (e.g. below 15 %)
-- 📋 **Start with Windows** and minimize to tray instead of closing
-- 📋 **Export diagnostic report**: one file with versions, chip status and recent ACC errors, to attach to an issue
-- 📋 **Backup / restore settings** (EQ, mic, mix) to a file, automatic backup before every firmware update
-- 📋 Firmware page: progress bar per chip, collapsible log
+- ✅ **Tray icon** with battery %, low-battery notification (10 / 15 / 20 / 30 %, or off)
+- ✅ **Start with Windows** (in the tray) and keep running in the tray when the window is closed
+- ✅ **Export diagnostic report**: one file with versions, chip status, USB state and recent ACC errors (Windows user name removed)
+- ✅ **Backup / restore settings** (EQ, mic, mix) to a file, automatic backup before every firmware update or repair
+- ✅ Firmware page: progress bar per chip, collapsible log
+- ✅ Reconnects by itself when the base is unplugged and plugged back
 
 ## v0.3.0 - Game profiles 📋🔬
 

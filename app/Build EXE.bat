@@ -7,11 +7,11 @@ for /d %%D in ("%LOCALAPPDATA%\Programs\Python\Python3*") do if exist "%%D\pytho
 if not defined PY set PY=py
 echo Installing build tools...
 %PY% -m pip install --upgrade pyinstaller || goto :fail
-%PY% -m pip install pywinusb pillow "customtkinter==5.2.2" || goto :fail
+%PY% -m pip install pywinusb pillow pystray "customtkinter==5.2.2" || goto :fail
 echo Building A50 Control.exe ...
 %PY% -m PyInstaller --noconfirm --clean --onefile --windowed --name "A50 Control" ^
   --icon "%HERE%a50_control.ico" --add-data "%HERE%a50_control.ico;." ^
-  --paths "%HERE%..\tool" --hidden-import a50_tool --hidden-import a50_update --hidden-import a50_control_classic ^
+  --paths "%HERE%..\tool" --hidden-import a50_tool --hidden-import a50_update --hidden-import a50_control_classic --hidden-import pystray._win32 ^
   --collect-data customtkinter --workpath build --distpath dist --specpath build ^
   "%HERE%a50_control.py" || goto :fail
 copy /Y "dist\A50 Control.exe" "%USERPROFILE%\Desktop\A50 Control.exe" >nul

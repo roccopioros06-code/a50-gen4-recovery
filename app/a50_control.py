@@ -8,8 +8,12 @@ If CustomTkinter is missing, the classic UI is started instead.
 Close ASTRO Command Center while using this app. USE AT YOUR OWN RISK.
 Not affiliated with ASTRO Gaming or Logitech. No ASTRO/Logitech images or logos are included.
 """
+import glob
 import json
 import math
+import platform
+import socket
+import time
 import os
 import subprocess
 import sys
@@ -38,9 +42,14 @@ except Exception:  # fall back to the plain tkinter interface
     sys.exit(0)
 
 try:
-    from PIL import Image, ImageDraw, ImageTk
+    from PIL import Image, ImageDraw, ImageFont, ImageTk
 except ImportError:
-    Image = ImageDraw = ImageTk = None
+    Image = ImageDraw = ImageFont = ImageTk = None
+
+try:
+    import pystray  # tray icon (optional)
+except Exception:
+    pystray = None
 
 from a50_device import (A50, APP_NAME, APP_VERSION, DONATE_URL, EQ_PRESETS, REPO_URL, SLIDER,
                         DeviceError, HeadsetUnavailable, acc_running, find_repair_tool)
@@ -95,7 +104,63 @@ DATA_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "A50
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 USER_HEADSETS = os.path.join(DATA_DIR, "headsets")
 APP_HEADSETS = os.path.join(APP_DIR, "headsets")
-DEFAULTS = {"appearance": "Dark", "accent": "Cyan", "colorway": "", "photo": "", "sidebar": "expanded"}
+DEFAULTS = {"appearance": "Dark", "accent": "Cyan", "colorway": "", "photo": "", "sidebar": "expanded",
+            "close_to_tray": True, "low_battery": 15}
+BACKUP_DIR = os.path.join(DATA_DIR, "backups")
+SINGLE_PORT = 47650  # localhost only: lets a second launch bring the running app to the front
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def autostart_command():
+    if FROZEN:
+        return f'"{sys.executable}" --minimized'
+    exe = sys.executable
+    pyw = os.path.join(os.path.dirname(exe), "pythonw.exe")
+    return f'"{pyw if os.path.exists(pyw) else exe}" "{os.path.abspath(__file__)}" --minimized'
+
+
+def autostart_enabled():
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, APP_NAME)
+        return True
+    except Exception:
+        return False
+
+
+def set_autostart(on):
+    import winreg
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        if on:
+            winreg.SetValueEx(k, APP_NAME, 0, winreg.REG_SZ, autostart_command())
+        else:
+            try:
+                winreg.DeleteValue(k, APP_NAME)
+            except FileNotFoundError:
+                pass
+
+
+def other_instance_running():
+    """If the same version of A50 Control is already running, bring it to the front and return True.
+    An older/other version (or any version with --replace) is asked to quit, and this one starts."""
+    replace = "--replace" in sys.argv
+    try:
+        with socket.create_connection(("127.0.0.1", SINGLE_PORT), timeout=0.5) as c:
+            c.sendall(f"{'replace' if replace else 'hello'} {APP_VERSION}".encode())
+            c.settimeout(3)
+            answer = c.recv(16)
+    except OSError:
+        return False
+    if answer == b"shown":
+        return True
+    for _ in range(30):  # wait up to 6 s for the old one to close
+        time.sleep(0.2)
+        try:
+            socket.create_connection(("127.0.0.1", SINGLE_PORT), timeout=0.3).close()
+        except OSError:
+            return False
+    return True
 
 
 def headset_images():
@@ -221,6 +286,34 @@ def make_icon(name, color, px=48):
 def rgba(hex_color):
     h = hex_color.lstrip('#')
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) + (255,)
+
+
+def tray_image(pct, charging, accent):
+    """64x64 tray icon: battery percentage with a level bar, or a headset when there is no reading."""
+    S = 64
+    im = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    col = "#7C8594" if pct is None else BAD if pct <= 15 else WARN if pct <= 30 else OK if charging else accent
+    d.rounded_rectangle([1, 1, S - 2, S - 2], radius=14, fill=(14, 15, 18, 255), outline=rgba(col), width=4)
+    if pct is None:
+        im.alpha_composite(make_icon("headset", rgba(col), 40).resize((40, 40)), (12, 12))
+        return im
+    d.rectangle([9, S - 15, 9 + int((S - 18) * max(0, min(100, pct)) / 100), S - 10], fill=rgba(col))
+    text = str(pct)
+    font = None
+    if ImageFont:
+        for name in ("segoeuib.ttf", "arialbd.ttf", "DejaVuSans-Bold.ttf"):
+            try:
+                font = ImageFont.truetype(name, 30 if len(text) < 3 else 23)
+                break
+            except Exception:
+                pass
+        if font is None:
+            font = ImageFont.load_default()
+    box = d.textbbox((0, 0), text, font=font)
+    w, h = box[2] - box[0], box[3] - box[1]
+    d.text(((S - w) / 2 - box[0], (S - 16 - h) / 2 - box[1] + 3), text, font=font, fill=(255, 255, 255, 255))
+    return im
 
 
 # ------------------------------------------------------------------ custom widgets
@@ -400,10 +493,20 @@ class App(ctk.CTk):
         self._timers = {}
         self.preset_map = {}
         self.page = "Home"
+        self.busy = False          # a firmware/repair job owns the device: no polling or reconnecting
+        self.tray = None
+        self._bat_state = "init"
+        self._low_warned = False
+        self._tray_note = False
+        self._poll_n = 0
+        self._start_tray()          # before build(): the Settings page checks self.tray
         self.build()
-        self.after(200, self.connect)
+        self._listen_single_instance()
+        if "--minimized" in sys.argv:
+            self.withdraw() if self.tray else self.iconify()
+        self.after(200, lambda: self.connect(quiet="--minimized" in sys.argv))
         self.after(5000, self._poll)
-        self.protocol("WM_DELETE_WINDOW", self._quit)
+        self.protocol("WM_DELETE_WINDOW", self._close)
 
     # ---- theme helpers
     @property
@@ -716,10 +819,10 @@ class App(ctk.CTk):
         self.fw_notes.pack(anchor="w", padx=16)
         grid = ctk.CTkFrame(c, fg_color="transparent")
         grid.pack(fill="x", padx=16, pady=(8, 6))
-        for col, head in enumerate(("Component", "In file", "Installed", "Status")):
+        for col, head in enumerate(("Component", "In file", "Installed", "Status", "Progress")):
             ctk.CTkLabel(grid, text=head.upper(), text_color=PAL["muted"], font=ctk.CTkFont(size=11, weight="bold"),
                          anchor="w", width=(220 if col == 0 else 110)).grid(row=0, column=col, sticky="w", pady=(0, 4))
-        self.fw_cells = {}
+        self.fw_cells, self.fw_bars = {}, {}
         for r, (key, label, tested) in enumerate(self.FW_ROWS, start=1):
             ctk.CTkLabel(grid, text=label + ("" if tested else "  (experimental)"), anchor="w", width=220,
                          text_color=PAL["text"]).grid(row=r, column=0, sticky="w", pady=2)
@@ -729,6 +832,10 @@ class App(ctk.CTk):
                 l.grid(row=r, column=col, sticky="w")
                 cells.append(l)
             self.fw_cells[key] = cells
+            bar = ctk.CTkProgressBar(grid, width=150, height=8, progress_color=self.accent, fg_color=PAL["track"])
+            bar.set(0)
+            bar.grid(row=r, column=4, sticky="w", padx=(0, 8))
+            self.fw_bars[key] = bar
         opts = ctk.CTkFrame(c, fg_color="transparent")
         opts.pack(fill="x", padx=16, pady=(8, 4))
         self.fw_exp = ctk.CTkCheckBox(opts, text="Include processors (experimental)", fg_color=self.accent,
@@ -745,16 +852,36 @@ class App(ctk.CTk):
         self.fw_btn.pack(side="left")
         self.fw_summary = ctk.CTkLabel(row, text="", text_color=PAL["muted"])
         self.fw_summary.pack(side="left", padx=12)
+        self.fw_log_btn = ctk.CTkButton(row, text="Show log ▾", width=110, fg_color="transparent",
+                                        hover_color=PAL["hover"], text_color=PAL["muted"],
+                                        command=lambda: self._fw_toggle_log())
+        self.fw_log_btn.pack(side="right")
         self.fw_log = ctk.CTkTextbox(p, height=220, font=ctk.CTkFont(family="Consolas", size=12), corner_radius=12,
                                      fg_color=PAL["card"], text_color=PAL["text"], border_color=PAL["border"],
                                      border_width=1)
-        self.fw_log.pack(fill="both", expand=True, padx=8)
         self.fw_log.configure(state="disabled")
+        self.fw_log_shown = False
         self.fw_path = None
         self.fw_comps = {}
         auto = self._fw_autodetect()
         if auto:
             self.after(300, lambda: self._fw_load(auto))
+
+    def _fw_toggle_log(self, show=None):
+        show = (not self.fw_log_shown) if show is None else show
+        if show and not self.fw_log_shown:
+            self.fw_log.pack(fill="both", expand=True, padx=8)
+        elif not show and self.fw_log_shown:
+            self.fw_log.pack_forget()
+        self.fw_log_shown = show
+        self.fw_log_btn.configure(text="Hide log ▴" if show else "Show log ▾")
+
+    def _fw_progress(self, key, done, total):
+        try:
+            self.fw_bars[key].set(done / total)
+            self.fw_cells[key][2].configure(text=f"writing {100 * done // total}%", text_color=self.accent)
+        except (KeyError, tk.TclError):
+            pass
 
     def _fw_autodetect(self):
         import glob
@@ -774,6 +901,12 @@ class App(ctk.CTk):
 
     def run_inline(self, module, argv, out, done):
         """Run a tool's main() inside the app (no Python needed), streaming its output to `out`."""
+        self.busy = True
+
+        def finish():
+            self.busy = False
+            done()
+
         def work():
             old = sys.argv, sys.stdout, sys.stderr
             sys.argv = [module + ".py"] + argv
@@ -787,7 +920,7 @@ class App(ctk.CTk):
                 traceback.print_exc()
             finally:
                 sys.argv, sys.stdout, sys.stderr = old
-                self.after(0, done)
+                self.after(0, finish)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -870,6 +1003,7 @@ class App(ctk.CTk):
                                    + "Unofficial tool, use at your own risk. Base in PC mode, headset ON and docked, "
                                      "do not unplug anything.\n\nContinue?"):
             return
+        backup = self._auto_backup()
         args = ["update", self.fw_path, "--only", ",".join(plan)]
         if self.fw_force.get():
             args.append("--force")
@@ -881,16 +1015,42 @@ class App(ctk.CTk):
         self.dot.configure(text="●  Updating", text_color=WARN)
         self.fw_btn.configure(state="disabled")
         self._fw_log_add("\n=== update ===\n")
+        if backup:
+            self._fw_log_add(f"settings backup: {os.path.basename(backup)}\n")
+        for key in plan:
+            self.fw_bars[key].set(0)
+            self.fw_cells[key][2].configure(text="waiting", text_color=PAL["muted"])
+        self.fw_plan_running = plan
+        try:
+            self._fw_module().PROGRESS = lambda k, d, t: self.after(0, self._fw_progress, k, d, t)
+        except Exception:
+            pass
 
         self.run_inline("a50_update", args, self._fw_log_add, self._fw_done)
 
     def _fw_done(self):
         try:
-            self.fw_btn.configure(state="normal")
-        except tk.TclError:
+            self._fw_module().PROGRESS = None
+        except Exception:
             pass
+        try:
+            self.fw_btn.configure(state="normal")
+            text = self.fw_log.get("1.0", "end")
+            last = text[text.rfind("=== update ==="):]
+            bad = ("Traceback" in last or "CHECK" in last
+                   or ("Result:" not in last and "Nothing to do" not in last))
+        except tk.TclError:
+            bad = False
         self.connect()
         self._fw_refresh()
+        if bad:
+            self._fw_toggle_log(True)
+            self._notify("Firmware update finished with problems: check the log.")
+            messagebox.showwarning(APP_NAME, "The update reported a problem. Check the log, and export a report from "
+                                             "Maintenance if you need help. Don't unplug the base.")
+        else:
+            self._notify("Firmware update finished.")
+            self._set_status("✔ Firmware update finished")
 
     def _page_tools(self, p):
         self._title(p, "Maintenance", "Repair the Avnera radio chips after a failed firmware update.\n"
@@ -900,6 +1060,7 @@ class App(ctk.CTk):
         row = ctk.CTkFrame(c, fg_color="transparent")
         row.pack(fill="x", padx=16, pady=12)
         self.btn(row, "Diagnose (read-only)", lambda: self._tool("info"), primary=True).pack(side="left", padx=(0, 8))
+        self.btn(row, "Export report…", self._report, width=130).pack(side="left", padx=(0, 8))
         for text, action in (("Fix BASE radio chip", "fix-base"), ("Fix HEADSET radio chip", "fix-headset")):
             ctk.CTkButton(row, text=text, fg_color="transparent", border_width=1, border_color=WARN, text_color=WARN,
                           hover_color=PAL["hover"], corner_radius=8,
@@ -950,6 +1111,44 @@ class App(ctk.CTk):
                 "They stay on your PC."
                 if Image else "Install Pillow to use a photo: python -m pip install pillow")
         ctk.CTkLabel(c, text=note, text_color=PAL["muted"]).pack(anchor="w", padx=16, pady=(0, 12))
+
+        c = self.card(p, "Background")
+        c.pack(fill="x", padx=8, pady=(0, 10))
+        if self.tray:
+            sw = ctk.CTkSwitch(c, text="Keep running in the tray when the window is closed", progress_color=self.accent,
+                               text_color=PAL["text"],
+                               command=lambda: self._set_quiet("close_to_tray", bool(self.tray_sw.get())))
+            sw.select() if self.settings.get("close_to_tray", True) else sw.deselect()
+            sw.pack(anchor="w", padx=16, pady=(6, 4))
+            self.tray_sw = sw
+        sw = ctk.CTkSwitch(c, text="Start with Windows" + (" (in the tray)" if self.tray else ""),
+                           progress_color=self.accent, text_color=PAL["text"], command=self._toggle_autostart)
+        sw.select() if autostart_enabled() else sw.deselect()
+        sw.pack(anchor="w", padx=16, pady=4)
+        self.auto_sw = sw
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(6, 4))
+        ctk.CTkLabel(row, text="Low battery alert", width=140, anchor="w", text_color=PAL["text"]).pack(side="left")
+        opts = ["Off", "10%", "15%", "20%", "30%"]
+        seg = self._seg(row, opts, lambda v: self._set_quiet("low_battery", 0 if v == "Off" else int(v[:-1])))
+        lb = int(self.settings.get("low_battery") or 0)
+        seg.set(f"{lb}%" if f"{lb}%" in opts else "Off")
+        seg.pack(side="left")
+        note = ("The tray icon shows the battery level. Right-click it to open or quit the app."
+                if self.tray else "Tray icon not available: install it with  python -m pip install pystray")
+        ctk.CTkLabel(c, text=note, text_color=PAL["muted"]).pack(anchor="w", padx=16, pady=(2, 12))
+
+        c = self.card(p, "Backup")
+        c.pack(fill="x", padx=8, pady=(0, 10))
+        row = ctk.CTkFrame(c, fg_color="transparent")
+        row.pack(anchor="w", padx=16, pady=(6, 6))
+        self.btn(row, "Back up settings…", self._backup, width=150).pack(side="left", padx=(0, 6))
+        self.btn(row, "Restore…", self._restore, width=110).pack(side="left", padx=(0, 6))
+        self.btn(row, "Open backups folder", lambda: (os.makedirs(BACKUP_DIR, exist_ok=True),
+                                                      os.startfile(BACKUP_DIR)), width=160).pack(side="left")
+        ctk.CTkLabel(c, text="EQ presets and names, microphone, noise gate, mix. A backup is also made "
+                             "automatically before every firmware update or repair (last 10 kept).",
+                     text_color=PAL["muted"], wraplength=760, justify="left").pack(anchor="w", padx=16, pady=(0, 12))
 
         c = self.card(p, "About")
         c.pack(fill="x", padx=8)
@@ -1014,11 +1213,13 @@ class App(ctk.CTk):
     def _set_status(self, text, ok=True):
         self.status.configure(text=text, text_color=PAL["muted"] if ok else WARN)
 
-    def connect(self):
+    def connect(self, quiet=False):
         if self.dev:
             self.dev.close()
             self.dev = None
-        if acc_running():
+        if quiet and acc_running():
+            return  # never fight ACC for the device in the background
+        if not quiet and acc_running():
             messagebox.showwarning(APP_NAME, "ASTRO Command Center is running.\n\nClose it (also from the tray "
                                              "icon) first: two programs talking to the base at the same time is "
                                              "what breaks firmware updates.")
@@ -1027,6 +1228,7 @@ class App(ctk.CTk):
         except DeviceError as e:
             self.dot.configure(text="●  Not connected", text_color=BAD)
             self._set_status(str(e), ok=False)
+            self._update_tray(None)
             return
         self.dot.configure(text="●  Connected", text_color=OK)
         self.load_all()
@@ -1100,6 +1302,8 @@ class App(ctk.CTk):
             self.bat_bar.configure(progress_color=col)
             self.bat_info.configure(text="Charging" if bat[1] else "Not charging")
             self.hdr_bat.configure(text=(" " if self.icon("battery") else "🔋 ") + f"{bat[0]}%" + ("  ⚡" if bat[1] else ""))
+        self._update_tray(bat)
+        self._check_low_battery(bat)
         if st:
             self.hs_state.configure(text="On the base" if st[0] else "Wireless")
             self.hs_power.configure(text="Headset on" if st[1] else "Headset off")
@@ -1167,12 +1371,298 @@ class App(ctk.CTk):
             self._set_status("✔ Saved to headset")
 
     def _poll(self):
-        if self.dev and not self.loading and not self.dev.lock.locked():
-            try:
+        self._poll_n += 1
+        try:
+            if self.busy:
+                pass
+            elif self.dev and not self.loading and not self.dev.lock.locked():
                 self._show_battery(self._get(self.dev.battery), self._get(self.dev.headset_status))
+            elif not self.dev and self._poll_n % 2 == 0:
+                self.connect(quiet=True)  # base unplugged/replugged, or ACC closed
+        except tk.TclError:
+            pass
+        except Exception:  # base unplugged: drop the handle, reconnect later
+            if self.dev:
+                self.dev.close()
+                self.dev = None
+            try:
+                self.dot.configure(text="●  Not connected", text_color=BAD)
             except tk.TclError:
                 pass
+            self._update_tray(None)
         self.after(5000, self._poll)
+
+    # ---- tray, background and single instance
+    def _listen_single_instance(self):
+        try:
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.bind(("127.0.0.1", SINGLE_PORT))
+            srv.listen(2)
+        except OSError:
+            return
+        self._srv = srv
+
+        def serve():
+            while True:
+                try:
+                    c, _ = srv.accept()
+                except OSError:
+                    break
+                try:
+                    c.settimeout(2)
+                    msg = c.recv(64).decode(errors="ignore").split()
+                    leave = bool(msg) and (msg[0] == "replace" or (len(msg) > 1 and msg[1] != APP_VERSION))
+                    if leave and not self.busy:
+                        c.sendall(b"bye")
+                        self.after(0, self._quit)
+                    else:
+                        c.sendall(b"shown")
+                        self.after(0, self._show_window)
+                except OSError:
+                    pass
+                finally:
+                    c.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+
+    def _start_tray(self):
+        if not (pystray and Image):
+            return
+        M = pystray.MenuItem
+        menu = pystray.Menu(
+            M("Open A50 Control", lambda i, it: self.after(0, self._show_window), default=True),
+            M(lambda it: self._tray_text(), None, enabled=False),
+            pystray.Menu.SEPARATOR,
+            M("Start with Windows", lambda i, it: self.after(0, self._toggle_autostart),
+              checked=lambda it: autostart_enabled()),
+            M("Quit", lambda i, it: self.after(0, self._quit)))
+        try:
+            self.tray = pystray.Icon("A50Control", tray_image(None, False, self.accent), APP_NAME, menu)
+            self.tray.run_detached()
+        except Exception:
+            traceback.print_exc()
+            self.tray = None
+
+    def _tray_text(self):
+        b = self._bat_state
+        if not b or b == "init":
+            return "Headset: not connected"
+        return f"Battery: {b[0]}%" + ("  (charging)" if b[1] else "")
+
+    def _update_tray(self, bat):
+        state = (bat[0], bat[1]) if bat else None
+        if not self.tray or state == self._bat_state:
+            self._bat_state = state
+            return
+        self._bat_state = state
+        try:
+            self.tray.icon = tray_image(bat[0] if bat else None, bat[1] if bat else False, self.accent)
+            self.tray.title = f"{APP_NAME} · " + (f"{bat[0]}%" + (" charging" if bat[1] else "")
+                                                   if bat else "not connected")
+            self.tray.update_menu()
+        except Exception:
+            pass
+
+    def _check_low_battery(self, bat):
+        limit = int(self.settings.get("low_battery") or 0)
+        if not bat or not limit:
+            return
+        if bat[0] <= limit and not bat[1]:
+            if not self._low_warned:
+                self._low_warned = True
+                self._notify(f"Headset battery at {bat[0]}%. Put it on the base to charge.")
+        elif bat[1] or bat[0] > limit + 5:
+            self._low_warned = False
+
+    def _notify(self, text):
+        if self.tray:
+            try:
+                self.tray.notify(text, APP_NAME)
+            except Exception:
+                pass
+
+    def _show_window(self):
+        self.deiconify()
+        self.state("normal")
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(200, lambda: self.attributes("-topmost", False))
+        self.focus_force()
+
+    def _close(self):
+        if self.tray and self.settings.get("close_to_tray", True) and not self.busy:
+            self.withdraw()
+            if not self._tray_note:
+                self._tray_note = True
+                self._notify("Still running in the tray. Right-click the icon to quit.")
+        elif self.busy:
+            messagebox.showwarning(APP_NAME, "A firmware or repair job is running. Wait until it finishes.")
+        else:
+            self._quit()
+
+    def _toggle_autostart(self):
+        try:
+            set_autostart(not autostart_enabled())
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"Could not change the Windows startup setting.\n\n{e}")
+        if self.tray:
+            self.tray.update_menu()
+        if getattr(self, "auto_sw", None):
+            try:
+                self.auto_sw.select() if autostart_enabled() else self.auto_sw.deselect()
+            except tk.TclError:
+                pass
+
+    def _set_quiet(self, key, value):
+        """Save a setting that doesn't need the interface to be rebuilt."""
+        self.settings[key] = value
+        save_settings(self.settings)
+
+    # ---- backup / restore
+    def _snapshot_to(self, path):
+        data = {"app": APP_NAME, "version": APP_VERSION, "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "settings": self.dev.snapshot()}
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def _auto_backup(self):
+        """Saved before every firmware/repair job. Keeps the last 10."""
+        if not self.dev:
+            return None
+        try:
+            path = os.path.join(BACKUP_DIR, time.strftime("auto_%Y%m%d_%H%M%S.json"))
+            self._snapshot_to(path)
+            for old in sorted(glob.glob(os.path.join(BACKUP_DIR, "auto_*.json")))[:-10]:
+                os.remove(old)
+            return path
+        except Exception:
+            return None
+
+    def _backup(self):
+        if not self.dev:
+            messagebox.showinfo(APP_NAME, "Connect the base station first.")
+            return
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        path = filedialog.asksaveasfilename(title="Save settings backup", defaultextension=".json",
+                                            initialdir=BACKUP_DIR, initialfile=time.strftime("a50_settings_%Y%m%d.json"),
+                                            filetypes=[("A50 Control backup", "*.json")])
+        if not path:
+            return
+        try:
+            self._snapshot_to(path)
+            self._set_status(f"✔ Backup saved: {os.path.basename(path)}")
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"Backup failed.\n\n{e}")
+
+    def _restore(self):
+        if not self.dev:
+            messagebox.showinfo(APP_NAME, "Connect the base station first.")
+            return
+        os.makedirs(BACKUP_DIR, exist_ok=True)
+        path = filedialog.askopenfilename(title="Restore settings backup", initialdir=BACKUP_DIR,
+                                          filetypes=[("A50 Control backup", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            snap = data.get("settings", data)
+            if not isinstance(snap, dict) or "presets" not in snap:
+                raise ValueError("not an A50 Control backup")
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"This file can't be restored.\n\n{e}")
+            return
+        when = data.get("created", "unknown date")
+        if not messagebox.askyesno(APP_NAME, f"Restore settings from\n{os.path.basename(path)} ({when})?\n\n"
+                                             "Your current EQ, microphone and mix settings will be replaced."):
+            return
+        try:
+            failed = self.dev.restore(snap)
+        except DeviceError as e:
+            messagebox.showerror(APP_NAME, f"Restore failed.\n\n{e}")
+            return
+        self.load_all()
+        note = f"\n\nNot restored: {', '.join(failed)}" if failed else ""
+        if messagebox.askyesno(APP_NAME, f"Settings restored.{note}\n\nSave them to the headset now, so they "
+                                         "stay after power-off?"):
+            self.save()
+
+    # ---- diagnostic report
+    def _report(self):
+        path = filedialog.asksaveasfilename(
+            title="Save diagnostic report", defaultextension=".txt",
+            initialdir=os.path.join(os.path.expanduser("~"), "Desktop"),
+            initialfile=time.strftime("A50_report_%Y%m%d_%H%M.txt"), filetypes=[("Text file", "*.txt")])
+        if not path:
+            return
+        L = []
+        L.append(f"{APP_NAME} {APP_VERSION} - diagnostic report - {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        L.append(f"Windows: {platform.platform()} | Python {platform.python_version()} | "
+                 f"{'exe' if FROZEN else 'source'}")
+        L.append(f"ACC running: {acc_running()} | ACC installed: "
+                 f"{os.path.isdir(r'C:\Program Files (x86)\Astro Gaming\ASTRO Command Center')}")
+        try:
+            import pywinusb.hid as hid
+            pids = sorted({f"9886:{x.product_id:04X}" for x in hid.HidDeviceFilter(vendor_id=0x9886).get_devices()})
+            L.append("USB devices: " + (", ".join(pids) or "none") + "   (002C = normal, 002A = base stuck in update mode)")
+        except Exception as e:
+            L.append(f"USB devices: error {e}")
+        L.append("")
+        L.append("== Device ==")
+        if self.dev:
+            d = self.dev
+            for label, fn in (("Base processor (version, build)", d.base_info), ("Base radio chip", d.base_minor),
+                              ("Headset (processor, radio chip)", d.headset_version),
+                              ("Battery (%, charging)", d.battery), ("Headset (docked, on)", d.headset_status)):
+                try:
+                    v = fn()
+                except DeviceError as e:
+                    v = f"error: {e}"
+                L.append(f"{label}: {v}")
+        else:
+            L.append("Base station not connected" + (" (job running)" if self.busy else ""))
+        L.append("")
+        L.append("== ASTRO Command Center log (errors only, last 40) ==")
+        logdir = os.path.expandvars(r"%LOCALAPPDATA%\Astro Gaming\ASTRO Command Center\Logs")
+        files = [f for f in glob.glob(os.path.join(logdir, "*")) if os.path.isfile(f)
+                 and "acc_guard" not in os.path.basename(f).lower()]
+        if files:
+            last = max(files, key=os.path.getmtime)
+            L.append(f"File: {os.path.basename(last)}")
+            try:
+                with open(last, encoding="utf-8", errors="replace") as f:
+                    rows = f.read().splitlines()
+                errs = [r for r in rows if any(k in r for k in ("ERROR", "Error", "error", "invalid", "TIMEOUT"))]
+                L.extend(errs[-40:] or ["(no errors found)"])
+            except Exception as e:
+                L.append(f"(can't read: {e})")
+        else:
+            L.append("(no ACC log found)")
+        for title, box in (("Maintenance log", getattr(self, "log", None)), ("Firmware log", getattr(self, "fw_log", None))):
+            try:
+                text = box.get("1.0", "end").strip() if box else ""
+            except tk.TclError:
+                text = ""
+            if text:
+                L.extend(["", f"== {title} ==", text[-6000:]])
+        report = "\n".join(L)
+        home, user = os.path.expanduser("~"), os.environ.get("USERNAME", "")
+        report = report.replace(home, "%USERPROFILE%")
+        if len(user) > 2:
+            report = report.replace(user, "<user>")
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(report + "\n")
+        except Exception as e:
+            messagebox.showerror(APP_NAME, f"Could not save the report.\n\n{e}")
+            return
+        if messagebox.askyesno(APP_NAME, "Report saved. Attach it to a GitHub issue or a Reddit message when you "
+                                         "ask for help (your Windows user name is removed).\n\nOpen the folder?"):
+            try:
+                os.startfile(os.path.dirname(path))
+            except Exception:
+                pass
 
     # ---- maintenance
     def _log(self, text):
@@ -1190,19 +1680,38 @@ class App(ctk.CTk):
                           "Unofficial, use at your own risk. Only do this if Diagnose shows that chip "
                           "is NOT at version 43.\n\nHeadset on and docked, do not unplug anything.\n\nContinue?"):
             return
+        backup = self._auto_backup() if dangerous else None
         if self.dev:
             self.dev.close()
             self.dev = None
         self.dot.configure(text="●  Busy", text_color=WARN)
         self._log(f"\n=== {action} ===\n")
+        if backup:
+            self._log(f"settings backup: {os.path.basename(backup)}\n")
 
         self.run_inline("a50_tool", [action], self._log, self.connect)
 
     def _quit(self):
+        if self.busy:
+            messagebox.showwarning(APP_NAME, "A firmware or repair job is running. Wait until it finishes.")
+            self._show_window()
+            return
+        if self.tray:
+            try:
+                self.tray.stop()
+            except Exception:
+                pass
+        if getattr(self, "_srv", None):
+            try:
+                self._srv.close()
+            except OSError:
+                pass
         if self.dev:
             self.dev.close()
         self.destroy()
 
 
 if __name__ == "__main__":
+    if other_instance_running():
+        sys.exit(0)
     App().mainloop()

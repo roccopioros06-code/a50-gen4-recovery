@@ -15,7 +15,7 @@ except ImportError:
     hid = None
 
 APP_NAME = "A50 Control"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.2.0"
 VID, PID = 0x9886, 0x002C
 DONATE_URL = "https://paypal.me/d4rky06"
 REPO_URL = "https://github.com/roccopioros06-code/a50-gen4-recovery"
@@ -184,6 +184,51 @@ class A50:
     def save_values(self):
         self.req(0x61, timeout=6.0)
 
+    # ---- backup / restore of all user settings
+    def snapshot(self):
+        """Every user setting as a JSON-friendly dict. Values that can't be read are left out."""
+        def get(fn):
+            try:
+                return fn()
+            except DeviceError:
+                return None
+        snap = {"active_preset": get(self.active_preset), "presets": {}, "sliders": {},
+                "noise_gate": get(self.noise_gate), "mic_eq": get(self.mic_eq),
+                "default_balance": get(self.default_balance), "alert_volume": get(self.alert_volume)}
+        for p in EQ_PRESETS:
+            snap["presets"][str(p)] = {"name": get(lambda: self.preset_name(p)), "gains": get(lambda: self.preset_gain(p))}
+        for name, idx in SLIDER.items():
+            snap["sliders"][name] = get(lambda: self.slider(idx))
+        return snap
+
+    def restore(self, snap):
+        """Write a snapshot back (active values only: call save_values() to keep them). Returns failed items."""
+        failed = []
+
+        def put(label, fn, *args):
+            if any(a is None for a in args):
+                return
+            try:
+                fn(*args)
+            except DeviceError:
+                failed.append(label)
+        for p, d in (snap.get("presets") or {}).items():
+            if str(p).isdigit() and int(p) in EQ_PRESETS and isinstance(d, dict):
+                if d.get("gains") and len(d["gains"]) == 5:
+                    put(f"preset {p} EQ", self.set_preset_gain, int(p), d["gains"])
+                if d.get("name"):
+                    put(f"preset {p} name", self.set_preset_name, int(p), str(d["name"]))
+        for name, v in (snap.get("sliders") or {}).items():
+            if name in SLIDER:
+                put(name, self.set_slider, SLIDER[name], v)
+        put("noise gate", self.set_noise_gate, snap.get("noise_gate"))
+        put("mic EQ", self.set_mic_eq, snap.get("mic_eq"))
+        put("default balance", self.set_default_balance, snap.get("default_balance"))
+        put("alert volume", self.set_alert_volume, snap.get("alert_volume"))
+        if snap.get("active_preset") in EQ_PRESETS:
+            put("active preset", self.set_active_preset, snap["active_preset"])
+        return failed
+
 
 # --------------------------------------------------------------------------- helpers
 def acc_running():
@@ -191,8 +236,9 @@ def acc_running():
         return False
     try:
         out = subprocess.run(["tasklist", "/FI", "IMAGENAME eq ASTRO Command Center.exe"],
-                             capture_output=True, text=True, timeout=5).stdout
-        return "ASTRO Command Center.exe" in out
+                             capture_output=True, timeout=5,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        return b"ASTRO Command Center.exe" in out  # bytes: tasklist output is in the console code page
     except Exception:
         return False
 

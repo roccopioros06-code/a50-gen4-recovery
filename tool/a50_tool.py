@@ -144,13 +144,20 @@ def info(base):
     else:
         log(f"Headset info:    {why} (harmless if the other headset lines are ok)")
     ok, why, _, r = base.cmd(0xDA, b"\x0A")
+    ok_mcu_flag = [ok]
     log(f"HEADSET MCU:     {'version %d' % int.from_bytes(bytes(r[3:5]), 'little') if ok else why}")
     ok, why, _, r = base.cmd(0xD6, b"\x0A")
     avc = r[3] if ok else None
     log(f"HEADSET Avnera:  {'version %d' % avc if ok else why}")
+    ok_mcu = ok_mcu_flag[0]
     if avb != 43:
         log("  -> BASE Avnera not ok: run 'fix-base'")
-    if avc != 43:
+    if avb == 43 and avc is None and not ok_mcu:
+        log("  -> HEADSET UNREACHABLE: the base can't talk to the headset at all (processor and radio both")
+        log("     time out), so 'fix-headset' can't work yet. Leave it docked overnight with the base plugged in.")
+        log("     If it stays unreachable after a failed update, the headset processor was probably left")
+        log("     half-written: try Maintenance > 'Recover headset processor' (experimental) in A50 Control.")
+    elif avc != 43:
         log("  -> HEADSET Avnera not ok: run 'fix-headset' (headset on and docked)")
     if avb == 43 and avc == 43:
         log("All good.")

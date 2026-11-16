@@ -57,6 +57,10 @@ DEFAULTS = {"theme": "dark", "colors": {"app": "#00B4FF", "shell": "#1C2029", "h
             "close_to_tray": True, "low_battery": 15, "hotkeys": True}
 FW_ROWS = (("tx_mcu", "Base processor", False), ("tx_radio", "Base radio chip", True),
            ("rx_mcu", "Headset processor", False), ("rx_radio", "Headset radio chip", True))
+# The two radio chip images are the same in every official package (see PROTOCOL.md)
+KNOWN_MD5 = {"tx_radio": "6f27ce7304020d501fbe79f9adb8de76", "rx_radio": "a42fc26cd382764bee66e57b72ae7125"}
+FW_ORDER = ["tx_radio", "rx_radio", "tx_mcu", "rx_mcu"]   # safest first: tested radio chips, then processors
+MIN_BATTERY = 30
 URLS = {"donate": DONATE_URL, "repo": REPO_URL, "apo": apo.DOWNLOAD_URL, "issues": REPO_URL + "/issues"}
 
 
@@ -155,6 +159,41 @@ def tray_image(pct, charging, accent="#00B4FF"):
     return im
 
 
+def keep_awake(on):
+    """Stops Windows from sleeping while a chip is written."""
+    try:
+        import ctypes
+        ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | (ES_SYSTEM_REQUIRED if on else 0))
+    except Exception:
+        pass
+
+
+def on_ac_power():
+    """True on mains, False on battery, None if unknown (desktop PCs report mains)."""
+    try:
+        import ctypes
+
+        class SPS(ctypes.Structure):
+            _fields_ = [("ACLineStatus", ctypes.c_byte), ("BatteryFlag", ctypes.c_byte),
+                        ("BatteryLifePercent", ctypes.c_byte), ("SystemStatusFlag", ctypes.c_byte),
+                        ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
+        s = SPS()
+        if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(s)):
+            return {1: True, 0: False}.get(s.ACLineStatus)
+    except Exception:
+        pass
+    return None
+
+
+def base_in_update_mode():
+    try:
+        import pywinusb.hid as hid
+        return bool(hid.HidDeviceFilter(vendor_id=0x9886, product_id=0x002A).get_devices())
+    except Exception:
+        return False
+
+
 class _Writer:
     def __init__(self, cb):
         self.cb = cb
@@ -191,6 +230,7 @@ class Core:
         self.hk = None
         self.fw_path = None
         self.fw_comps = {}
+        self.fw_check = {}
         self.fw_notes = ""
         self.quit_event = threading.Event()
 
@@ -347,7 +387,7 @@ class Core:
         self.auto, self.auto_saved = None, None
 
     # ---------------------------------------------------------------- jobs (firmware update, repair)
-    def run_job(self, name, module, argv, before=None):
+    def run_job(self, name, module, argv, extra=None):
         if self.busy:
             raise DeviceError("Another job is running")
         backup = self.auto_backup()
@@ -359,12 +399,13 @@ class Core:
                 except Exception:
                     pass
                 self.dev = None
-        self.job = {"name": name, "running": True, "log": [], "progress": {}, "ok": None}
+        self.job = {"name": name, "running": True, "log": [], "progress": {}, "ok": None, **(extra or {})}
         if backup:
             self.job["log"].append(f"settings backup: {os.path.basename(backup)}\n")
 
         def work():
             mod = None
+            keep_awake(True)
             old = sys.argv, sys.stdout, sys.stderr
             sys.argv = [module + ".py"] + argv
             sys.stdout = sys.stderr = _Writer(self.job["log"].append)
@@ -385,9 +426,18 @@ class Core:
                 text = "".join(self.job["log"])
                 tail = text[text.rfind("===") if "===" in text else 0:]
                 self.job["ok"] = not ("Traceback" in tail or "CHECK" in tail or "error" in tail.lower()[-300:])
-                self.job["running"] = False
+                keep_awake(False)
                 self.busy = False
                 self.connect()
+                if self.job.get("verify"):
+                    key, want = self.job["verify"]
+                    time.sleep(2)
+                    got = self.fw_installed().get(key)
+                    self.job["verified"] = got == want
+                    self.job["log"].append(f"\nCheck after the update: {key} expected {want}, reads {got} -> "
+                                           f"{'OK' if got == want else 'NOT OK'}\n")
+                    self.job["ok"] = bool(self.job["ok"]) and got == want
+                self.job["running"] = False
                 self.notify(f"{name} finished" + ("" if self.job["ok"] else ": check the log"))
 
         threading.Thread(target=work, daemon=True).start()
@@ -406,6 +456,14 @@ class Core:
         if not comps:
             raise DeviceError("No A50 Gen 4 (Mimas) firmware in this file")
         self.fw_path, self.fw_comps = path, comps
+        import hashlib
+        self.fw_check = {}
+        for k, (ver, data) in comps.items():
+            md5 = hashlib.md5(data).hexdigest()
+            known = KNOWN_MD5.get(k)
+            self.fw_check[k] = {"size": len(data), "md5": md5,
+                                "integrity": "verified" if known == md5 else ("mismatch" if known else
+                                                                              ("ok" if len(data) > 1024 else "bad"))}
         first = [l for l in notes.strip().split("\n\n")[0].splitlines() if l.strip("- ")] if notes else []
         self.fw_notes = " · ".join(first[1:4]) if len(first) > 1 else ""
         return self.fw_state()
@@ -415,6 +473,95 @@ class Core:
                 r"C:\Program Files (x86)\Astro Gaming\ASTRO Command Center\assets\forced_fw\*.afw"]
         files = [f for p in pats for f in glob.glob(p)]
         return max(files, key=os.path.basename) if files else None
+
+    def preflight(self, key=None):
+        """Safety checks before writing a chip. level: block = the step can't start, warn = shown only."""
+        out = []
+        add = lambda cid, label, ok, detail, level="block": out.append(
+            {"id": cid, "label": label, "ok": bool(ok), "detail": detail, "level": level})
+        acc = acc_running()
+        add("acc", "ASTRO Command Center closed", not acc,
+            "Close it, also from the tray: two programs can't talk to the base at once." if acc else "Closed")
+        stuck = base_in_update_mode()
+        add("base", "Base station connected (PC mode, USB)", bool(self.dev) or stuck,
+            "Stuck in update mode (9886:002A): only 'Base processor' can be run, to finish it." if stuck else
+            ("Connected" if self.dev else "Not found: connect the base by USB, straight into the PC (no hub)."))
+        q = self.last if self.dev else {}
+        inst = self.fw_installed()
+        need_hs = key is None or key.startswith("rx_")
+        if need_hs:
+            add("docked", "Headset on the base", q.get("docked"), "Docked" if q.get("docked") else
+                "Put the headset on the base and leave it there until the end.")
+            reach = inst.get("rx_radio") is not None
+            add("reach", "Headset answers the base", reach, "Answers" if reach else
+                "No answer: turn it on and dock it. If it never answers, use Maintenance > Recover headset processor.")
+            bat, chg = q.get("battery"), q.get("charging")
+            okb = bat is not None and (bat >= MIN_BATTERY or chg)
+            add("battery", f"Headset battery at least {MIN_BATTERY}% (or charging)", okb,
+                "Unknown" if bat is None else f"{bat}%" + (" charging" if chg else ""))
+        f = bool(self.fw_comps)
+        add("file", "Official firmware file loaded", f, os.path.basename(self.fw_path) if f else
+            "Choose the .afw file that ASTRO Command Center downloaded.")
+        if f:
+            bad = [k for k, v in self.fw_check.items() if v["integrity"] in ("mismatch", "bad")
+                   and (key is None or k == key)]
+            add("integrity", "Firmware images look intact", not bad,
+                "Radio chip images match the known official ones" if not bad else
+                "Damaged or unknown image: " + ", ".join(bad) + ". Download the file again with ACC.")
+        ac = on_ac_power()
+        add("power", "PC on mains power", ac is not False,
+            "Laptop on battery: plug it in, a shutdown in the middle is the worst case." if ac is False else "OK",
+            level="warn")
+        add("sleep", "PC kept awake during the update", True, "Sleep is blocked automatically while it works",
+            level="warn")
+        return out
+
+    def fw_steps(self, exp=False):
+        inst = self.fw_installed()
+        stuck = base_in_update_mode()
+        steps = []
+        labels = {k: (l, t) for k, l, t in FW_ROWS}
+        for key in FW_ORDER:
+            label, tested = labels[key]
+            fv = self.fw_comps.get(key, (None,))[0]
+            iv = inst.get(key)
+            chk = self.fw_check.get(key, {})
+            if stuck and key != "tx_mcu":
+                state = "blocked"
+            elif fv is None:
+                state = "nofile"
+            elif not tested and not exp:
+                state = "experimental"
+            elif stuck and key == "tx_mcu":
+                state = "update"
+            elif iv is None and key.startswith("rx_"):
+                state = "unreachable"
+            else:
+                state = "ok" if fv == iv else "update"
+            steps.append({"key": key, "label": label, "tested": tested, "file": fv, "installed": iv,
+                          "state": state, "integrity": chk.get("integrity"), "size": chk.get("size"),
+                          "md5": chk.get("md5")})
+        return {"file": os.path.basename(self.fw_path) if self.fw_path else None, "notes": self.fw_notes,
+                "steps": steps, "stuck": stuck, "busy": self.busy}
+
+    def fw_run_step(self, key, reinstall=False, exp=False):
+        if key not in FW_ORDER:
+            raise DeviceError("Unknown chip")
+        tested = dict((k, t) for k, _, t in FW_ROWS)[key]
+        if not tested and not exp:
+            raise DeviceError("Processors are experimental: turn on 'Include processors' first")
+        blockers = [c for c in self.preflight(key) if c["level"] == "block" and not c["ok"]
+                    and not (c["id"] == "base" and key == "tx_mcu" and base_in_update_mode())]
+        if blockers:
+            raise DeviceError("Not safe to start: " + "; ".join(c["label"] for c in blockers))
+        want = self.fw_comps[key][0]
+        argv = ["update", self.fw_path, "--only", key]
+        if reinstall:
+            argv.append("--force")
+        if not tested:
+            argv.append("--experimental")
+        label = dict((k, l) for k, l, _ in FW_ROWS)[key]
+        self.run_job(f"Update {label.lower()}", "a50_update", argv, extra={"verify": (key, want), "step": key})
 
     def fw_state(self, exp=False, force=False):
         inst = self.fw_installed()
@@ -855,6 +1002,18 @@ def api(name, body):
             f.write(data)
         c.fw_load(path)
         return c.fw_state(bool(body.get("exp")), bool(body.get("force")))
+    if name == "fw_steps":
+        if not c.fw_comps:
+            auto = c.fw_autodetect()
+            if auto:
+                try:
+                    c.fw_load(auto)
+                except Exception:
+                    pass
+        return {**c.fw_steps(bool(body.get("exp"))), "checks": c.preflight()}
+    if name == "fw_step":
+        c.fw_run_step(body["key"], bool(body.get("reinstall")), bool(body.get("exp")))
+        return {"ok": True}
     if name == "fw_update":
         st = c.fw_state(bool(body.get("exp")), bool(body.get("force")))
         plan = [r["key"] for r in st["rows"] if r["status"] == "update"]
@@ -867,6 +1026,16 @@ def api(name, body):
             argv.append("--experimental")
         c.run_job("Firmware update", "a50_update", argv)
         return {"plan": plan}
+    if name == "recover_headset_mcu":
+        if not c.fw_comps:
+            auto = c.fw_autodetect()
+            if auto:
+                c.fw_load(auto)
+        if "rx_mcu" not in c.fw_comps:
+            raise DeviceError("Load the firmware file (.afw) on the Firmware page first")
+        c.run_job("Recover headset processor", "a50_update",
+                  ["update", c.fw_path, "--only", "rx_mcu", "--force", "--experimental"])
+        return {"ok": True}
     if name == "tool":
         action = body["action"]
         if action not in ("info", "fix-base", "fix-headset"):
@@ -876,7 +1045,8 @@ def api(name, body):
         return {"ok": True}
     if name == "job":
         start = int(body.get("from", 0))
-        return {"name": c.job["name"], "running": c.job["running"], "ok": c.job["ok"],
+        return {"name": c.job["name"], "running": c.job["running"], "ok": c.job["ok"], "step": c.job.get("step"),
+                "verified": c.job.get("verified"),
                 "log": "".join(c.job["log"][start:]), "next": len(c.job["log"]), "progress": c.job["progress"]}
     # ---- backup, report, settings
     if name == "backup":
@@ -1031,6 +1201,21 @@ def show_window():
         webbrowser.open(URL)
 
 
+def close_old_windows():
+    """A window left by a previous run points at a server that no longer exists: close it, so the new one
+    (with the new version) is opened instead of bringing the old one to the front."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    u = ctypes.windll.user32
+    for _ in range(20):
+        hwnd = find_window()
+        if not hwnd:
+            return
+        u.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+        time.sleep(0.25)
+
+
 def window_watch():
     """Without a tray icon, closing the window closes the app."""
     seen = False
@@ -1155,6 +1340,7 @@ def main():
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     URL = f"http://127.0.0.1:{httpd.server_address[1]}/"
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    close_old_windows()
     CORE.connect(quiet="--minimized" in sys.argv)
     start_tray()
     if CORE.settings.get("hotkeys", True):

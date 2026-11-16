@@ -343,6 +343,12 @@ def main():
     if not plan:
         log("Nothing to do.")
         return
+    import hashlib
+    known = {"tx_radio": "6f27ce7304020d501fbe79f9adb8de76", "rx_radio": "a42fc26cd382764bee66e57b72ae7125"}
+    for key in plan:
+        if key in known and hashlib.md5(comps[key][1]).hexdigest() != known[key]:
+            sys.exit(f"{COMPONENTS[key]['label']}: the image in this file is not the known official one. "
+                     "Nothing written. Download the firmware again with ACC.")
     log("=== UPDATING - do not unplug the base, keep the headset on and docked ===")
     for key in plan:
         link = update_component(key, comps[key][1])

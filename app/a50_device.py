@@ -15,7 +15,7 @@ except ImportError:
     hid = None
 
 APP_NAME = "A50 Control"
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 VID, PID = 0x9886, 0x002C
 DONATE_URL = "https://paypal.me/d4rky06"
 REPO_URL = "https://github.com/roccopioros06-code/a50-gen4-recovery"

@@ -72,6 +72,14 @@ Command line: `python a50_tool.py info | fix-base | fix-headset`.
 
 An open-source, lightweight alternative to ASTRO Command Center: no login, no Logitech servers.
 
+<p align="center"><img src="docs/screenshots/home.png" alt="A50 Control: Home" width="820"></p>
+
+| Equalizer | Game profiles |
+|---|---|
+| <img src="docs/screenshots/equalizer.png" alt="Equalizer" width="400"> | <img src="docs/screenshots/profiles.png" alt="Game profiles" width="400"> |
+| **Microphone** | **Your colours** |
+| <img src="docs/screenshots/microphone.png" alt="Microphone" width="400"> | <img src="docs/screenshots/colors.png" alt="Colours" width="400"> |
+
 - Status: battery, docked/on, base and headset firmware, radio chip health
 - Equalizer: 3 presets, 5 bands (-7..+7 dB), rename presets
 - Microphone: level, sidetone, noise gate (Streaming / Night / Home / Tournament), mic EQ, **quick setups**
@@ -93,7 +101,7 @@ An open-source, lightweight alternative to ASTRO Command Center: no login, no Lo
 - **Tray icon** with the battery level, low-battery alert, start with Windows
 - **Backup / restore** of all settings (also automatic before firmware updates)
 - **Diagnostic report** to attach when you ask for help
-- Settings: dark / light / system theme, accent color, headset look, collapsible sidebar
+- **Colours**: pick any colour for the app, the headset lights, the shell and the cushions
 
 ### Run it
 
@@ -115,6 +123,11 @@ The **Firmware** page updates the headset like ACC does, but from a file **you p
 > `C:\Program Files (x86)\Astro Gaming\ASTRO Command Center\assets\forced_fw\`). The app finds it there automatically,
 > or you can pick any `.afw` with *Choose .afw file...*.
 
+- **Guided and split**: one chip at a time, in the safest order (radio chips first, processors last). The next step
+  unlocks only after the previous one is **verified** by reading its version back.
+- **Safety checks before every step**: ACC closed, base connected, headset docked and answering, battery at least 30%
+  (or charging), firmware images intact (the radio chip images are compared with the known official ones), PC on mains power.
+- The PC is kept awake while writing, and your settings are backed up before every step.
 - It shows the version of each chip in the file and on your device, and only writes what differs.
 - **Radio chips** (base TX_RADIO, headset RX_RADIO): tested.
 - **Processors** (base TX_MCU, headset RX_MCU): **experimental**, off by default. Each has been rewritten successfully

@@ -893,64 +893,114 @@ async function jobWatch() {
     } while (j.running);
   } catch (e) { toast(e.message, 'err'); }
   JOB.polling = false;
-  if (j && !j.running) { toast(j.name + (j.ok ? ' finished' : ' finished with problems: read the log'), j.ok ? 'ok' : 'err'); await sleep(1500); loadFull(true); P.firmware.built && P.firmware.refresh(); }
+  if (j && !j.running) { toast(j.name + (j.verified === true ? ': done and verified' : j.verified === false ? ': the version read back is wrong, read the log' : j.ok ? ' finished' : ' finished with problems: read the log'), j.ok ? 'ok' : 'err'); await sleep(1500); loadFull(true); P.firmware.built && P.firmware.refresh(); }
 }
 
 // ======================================================================= FIRMWARE
 const FW_LABEL = { tx_mcu: 'Base processor', tx_radio: 'Base radio chip', rx_mcu: 'Headset processor', rx_radio: 'Headset radio chip' };
+const FW_TIME = { tx_radio: 'about 1 minute', rx_radio: 'about 2 minutes', tx_mcu: 'a few minutes', rx_mcu: 'a few minutes' };
 P.firmware = {
   build() {
-    this.el.innerHTML = title('fw', 'Firmware', 'Install the official firmware file safely, one chip at a time.') + `
-    <section class="card">${ct('Firmware file', '<span class="small muted" id="fw-file">No file loaded</span>')}
-      <div class="row wrap"><button class="btn" id="fw-pick">${ic('file', 16)}Choose .afw file</button><button class="btn" id="fw-auto">${ic('refresh', 16)}Look for ASTRO Command Center's file</button></div>
+    this.el.innerHTML = title('fw', 'Firmware', 'A safe, guided update: one chip at a time, with checks before and after each step.') + `
+    <section class="card">${ct('1 · Firmware file', '<span class="small muted" id="fw-file">No file loaded</span>')}
+      <div class="row wrap"><button class="btn" id="fw-pick">${ic('file', 16)}Choose .afw file</button><button class="btn" id="fw-auto">${ic('refresh', 16)}Find ASTRO Command Center's file</button></div>
       <div class="small muted" id="fw-notes" style="margin-top:10px"></div></section>
-    <section class="card">${ct('Versions', '<span class="badge jobst" hidden></span>')}
-      <table class="t"><thead><tr><th>Chip</th><th>Installed</th><th>In the file</th><th>Status</th><th style="width:28%">Progress</th></tr></thead><tbody id="fw-rows"></tbody></table>
-      <div class="opt" style="margin-top:10px"><div class="grow"><div class="ot">Include processors (experimental)</div><div class="od">The radio chips are tested. Processors are updated only if you turn this on.</div></div><span id="fw-exp"></span></div>
-      <div class="opt"><div class="grow"><div class="ot">Reinstall even if the version is the same</div><div class="od">Useful to repair a chip with a bad install.</div></div><span id="fw-force"></span></div>
-      <div class="row sp wrap" style="margin-top:14px"><div class="small soft" style="max-width:560px">Keep the headset on the base and the USB cable connected. Don't close the app while it works. A backup of your settings is made first.</div>
-        <button class="btn btn-p" id="fw-go">${ic('upload', 16, 'currentColor', 2)}Update</button></div></section>
+    <section class="card">${ct('2 · Safety checks', '<button class="btn sm" id="fw-recheck">' + ic('refresh', 14) + 'Check again</button>')}
+      <div id="fw-checks"></div></section>
+    <section class="card">${ct('3 · Update one chip at a time', '<span class="badge jobst" hidden></span>')}
+      <div class="small soft" style="margin:-4px 0 14px">Radio chips first (tested), processors last (experimental). Each step is verified by reading the version back before the next one unlocks. A settings backup is made before every step.</div>
+      <div class="col" style="gap:12px" id="fw-steps"></div>
+      <div class="opt" style="margin-top:14px"><div class="grow"><div class="ot">Include processors (experimental)</div><div class="od">The processor steps have not been tested on real units. Leave this off unless a processor really needs it.</div></div><span id="fw-exp"></span></div>
+    </section>
     <section class="card">${ct('Log')}<div class="log joblog"></div></section>`;
-    this.exp = false; this.force = false;
+    this.exp = false;
     $('#fw-exp').appendChild(swBtn(false, v => { this.exp = v; this.refresh(); }));
-    $('#fw-force').appendChild(swBtn(false, v => { this.force = v; this.refresh(); }));
     $('#fw-pick').onclick = async () => {
       const f = await pickFile('.afw', 'b64');
       if (!f) return;
-      const r = await act(() => api('fw_upload', { name: f.name, data: f.data, exp: this.exp, force: this.force }), 'Firmware file loaded');
-      if (r) this.draw(r);
+      if (await act(() => api('fw_upload', { name: f.name, data: f.data }), 'Firmware file loaded')) this.refresh();
     };
     $('#fw-auto').onclick = () => this.refresh(true);
-    $('#fw-go').onclick = () => this.go();
+    $('#fw-recheck').onclick = () => this.refresh();
     this.refresh();
   },
   enter() { this.refresh(); },
   async refresh(say) {
-    const r = await act(() => api('fw_state', { exp: this.exp, force: this.force }));
-    if (r) { this.draw(r); if (say && !r.file) toast("ASTRO Command Center's firmware file was not found. Choose the .afw file yourself.", 'err'); }
-  },
-  draw(r) {
+    if (JOB.polling) return;
+    const r = await act(() => api('fw_steps', { exp: this.exp }));
+    if (!r) return;
     this.st = r;
+    if (say && !r.file) toast("ASTRO Command Center's firmware file was not found. Choose the .afw file yourself.", 'err');
     $('#fw-file').textContent = r.file || 'No file loaded';
     $('#fw-notes').textContent = r.notes ? 'Notes: ' + r.notes : '';
-    const lab = { update: ['acc', 'Will update'], ok: ['ok', 'Up to date'], experimental: ['warn', 'Experimental: off'], none: ['', r.file ? 'Not in file' : '–'] };
-    $('#fw-rows').innerHTML = r.rows.map(x => `<tr><td>${esc(x.label)}${x.tested ? '' : ' <span class="small muted">(experimental)</span>'}</td><td class="n">${x.installed ?? '–'}</td><td class="n">${x.file ?? '–'}</td>
-      <td><span class="badge ${lab[x.status][0]}">${lab[x.status][1]}</span></td><td><div class="small muted" data-pt="${x.key}">&nbsp;</div><div class="pbar"><i data-pb="${x.key}"></i></div></td></tr>`).join('');
-    $('#fw-go').disabled = !r.rows.some(x => x.status === 'update') || !!S.quick.busy;
+    this.blocking = r.checks.filter(c => c.level === 'block' && !c.ok);
+    $('#fw-checks').innerHTML = r.checks.map(c => {
+      const col = c.ok ? '#5BE6A9' : c.level === 'warn' ? '#FFC170' : '#FF8A95';
+      return `<div class="opt">${ic(c.ok ? 'check' : 'alert', 18, col, c.ok ? 2.4 : 1.8)}<div class="grow"><div class="ot">${esc(c.label)}</div><div class="od">${esc(c.detail)}</div></div>
+        <span class="badge ${c.ok ? 'ok' : c.level === 'warn' ? 'warn' : 'bad'}">${c.ok ? 'OK' : c.level === 'warn' ? 'Warning' : 'Fix first'}</span></div>`;
+    }).join('');
+    this.draw();
+  },
+  draw() {
+    const r = this.st, host = $('#fw-steps');
+    host.innerHTML = '';
+    const firstPending = r.steps.find(x => x.state === 'update');
+    const intLab = { verified: ['ok', 'image verified'], ok: ['', 'image ok'], mismatch: ['bad', 'image damaged'], bad: ['bad', 'image damaged'] };
+    r.steps.forEach((x, i) => {
+      const st = { ok: ['ok', 'Up to date'], update: ['acc', 'Needs update'], experimental: ['warn', 'Experimental: off'], unreachable: ['warn', 'Headset not answering'], nofile: ['', 'Not in file'], blocked: ['', 'Waiting for the base'] }[x.state] || ['', x.state];
+      const il = x.integrity && intLab[x.integrity];
+      const row = h(`<div class="tile static" style="flex-direction:row;align-items:center;gap:16px;${firstPending === x ? 'border-color:rgba(var(--accr),.45)' : ''}">
+        <div class="title-ic" style="width:40px;height:40px;border-radius:12px;font-weight:700;font-family:var(--display)">${i + 1}</div>
+        <div class="grow"><div class="row wrap" style="gap:8px"><span class="tn">${esc(x.label)}</span>${x.tested ? '' : '<span class="badge warn" style="height:20px">experimental</span>'}${il ? `<span class="badge ${il[0]}" style="height:20px">${il[1]}</span>` : ''}</div>
+          <div class="td">Installed <b>${x.installed ?? '–'}</b> · in the file <b>${x.file ?? '–'}</b> · takes ${FW_TIME[x.key]}</div>
+          <div class="pbar" style="margin-top:8px"><i data-pb="${x.key}"></i></div><div class="small muted" data-pt="${x.key}"></div></div>
+        <span class="badge ${st[0]}">${st[1]}</span><span class="act"></span></div>`);
+      const actEl = $('.act', row);
+      if (x.state === 'update') {
+        const b = h(`<button class="btn ${firstPending === x ? 'btn-p' : ''}" type="button">${ic('upload', 15, 'currentColor', 2)}Update</button>`);
+        b.disabled = firstPending !== x || this.blocked(x.key) || r.busy;
+        if (firstPending !== x) b.title = 'Do the steps in order';
+        b.onclick = () => this.go(x, false);
+        actEl.appendChild(b);
+      } else if (x.state === 'ok') {
+        const b = h(`<button class="btn sm" type="button">Reinstall</button>`);
+        b.disabled = !!firstPending || this.blocked(x.key) || r.busy || (!x.tested && !this.exp);
+        b.onclick = () => this.go(x, true);
+        actEl.appendChild(b);
+      } else if (x.state === 'unreachable') {
+        const b = h(`<button class="btn sm" type="button">Help</button>`);
+        b.onclick = () => modal('Headset not answering', "The base can't reach the headset, so its chips can't be read or written.\n\n1. Turn the headset on and put it on the base.\n2. If it's flat, leave it charging for an hour.\n3. If it still never answers after a failed update, use Maintenance > Recover headset processor (experimental).", [['OK', 1, 'btn-p']]);
+        actEl.appendChild(b);
+      }
+      host.appendChild(row);
+    });
+    if (!r.steps.some(x => x.state === 'update') && r.file && !r.steps.some(x => x.state === 'unreachable'))
+      host.appendChild(h(`<div class="small" style="color:#5BE6A9">${ic('check', 14, '#5BE6A9', 2.4)} The radio chips are up to date. Nothing to do.</div>`));
+    const newer = r.steps.filter(x => x.state === 'experimental' && x.file != null && x.installed != null && x.file !== x.installed);
+    if (newer.length) host.appendChild(h(`<div class="small soft">${ic('alert', 14, '#FFC170')} The file has a different version for: ${newer.map(x => esc(x.label.toLowerCase())).join(', ')}. If everything works, you don't need it.</div>`));
+  },
+  blocked(key) {
+    return this.blocking.some(c => {
+      if (key.startsWith('tx_') && ['docked', 'reach', 'battery'].includes(c.id)) return false;
+      if (c.id === 'integrity') { const st = this.st.steps.find(x => x.key === key); return st && ['mismatch', 'bad'].includes(st.integrity); }
+      if (c.id === 'base' && key === 'tx_mcu' && this.st.stuck) return false;
+      return true;
+    });
   },
   progress(p) {
     Object.entries(p).forEach(([k, [d, t]]) => {
       const key = Object.keys(FW_LABEL).find(x => k.includes(x)) || k;
       const b = $(`[data-pb="${key}"]`), tx = $(`[data-pt="${key}"]`);
       if (b) b.style.width = (t ? d / t * 100 : 0) + '%';
-      if (tx) tx.textContent = t ? `${Math.round(d / t * 100)}%` : '';
+      if (tx) tx.textContent = t ? `${Math.round(d / t * 100)}% written` : '';
     });
   },
-  async go() {
-    const plan = this.st.rows.filter(x => x.status === 'update').map(x => `• ${x.label}: ${x.installed ?? '?'} → ${x.file}`).join('\n');
-    if (!await confirmBox('Update firmware', `These chips will be updated:\n${esc(plan)}\n\nKeep the headset on the base and don't unplug anything until it says done.`, 'Update now')) return;
-    const r = await act(() => api('fw_update', { exp: this.exp, force: this.force }));
-    if (r) { $$('.jobst').forEach(s => s.hidden = false); jobWatch(); }
+  async go(x, reinstall) {
+    const warn = x.tested ? '' : '\n\n⚠ This is an EXPERIMENTAL step: it has never been tested on a real unit.';
+    const text = `${reinstall ? 'Reinstall' : 'Update'} the ${esc(x.label.toLowerCase())}: ${x.installed ?? '?'} → ${x.file}\nIt takes ${FW_TIME[x.key]}.\n\nUntil it says done:\n• don't unplug the base or move the headset off it\n• don't close A50 Control or turn off the PC\n\nA backup of your settings is made first, and the version is read back at the end to check it worked.${warn}`;
+    if (!await confirmBox(reinstall ? 'Reinstall chip' : 'Update chip', text, reinstall ? 'Reinstall now' : 'Update now', !x.tested)) return;
+    const r = await act(() => api('fw_step', { key: x.key, reinstall, exp: this.exp }));
+    if (r) { $$('.jobst').forEach(s => s.hidden = false); $$('#fw-steps .btn').forEach(b => b.disabled = true); jobWatch(); }
   }
 };
 
@@ -964,6 +1014,7 @@ P.maint = {
           <button class="tile" id="mt-info">${ic('radio', 20, 'var(--acc)')}<span class="tn">Diagnose</span><span class="td">Reads every chip and says what's wrong. Changes nothing.</span></button>
           <button class="tile" id="mt-fb">${ic('tools', 20, 'var(--acc)')}<span class="tn">Fix base radio chip</span><span class="td">Reinstalls the base station's radio firmware.</span></button>
           <button class="tile" id="mt-fh">${ic('tools', 20, 'var(--acc)')}<span class="tn">Fix headset radio chip</span><span class="td">Reinstalls the headset's radio firmware. Headset on the base.</span></button>
+          <button class="tile" id="mt-rh">${ic('alert', 20, '#FFC170')}<span class="tn">Recover headset processor <span class="badge warn" style="height:20px">experimental</span></span><span class="td">Only if Diagnose says the headset is unreachable after a failed update.</span></button>
         </div><div class="small muted" style="margin-top:12px">Pairing is never touched.</div></section>
       <section class="card">${ct('Settings backup')}
         <div class="soft small" style="margin-bottom:14px">Saves the 3 EQ presets with names, mic, sidetone, noise gate, balance and stream mix to a file. A backup is also made automatically before every firmware update or repair.</div>
@@ -982,6 +1033,11 @@ P.maint = {
       if (await act(() => api('tool', { action }))) { $$('.jobst').forEach(s => s.hidden = false); jobWatch(); }
     };
     $('#mt-info').onclick = () => run('info', 'Diagnose');
+    $('#mt-rh').onclick = async () => {
+      if (!connected()) return needDev();
+      if (!await confirmBox('Recover headset processor (experimental)', 'Use this only when Diagnose says the headset is UNREACHABLE after a failed firmware update.\n\nIt reinstalls the headset processor firmware from the .afw file (load it on the Firmware page). If the headset doesn\'t answer, the start is refused and nothing is written.\n\nThis path has never been tested on a real unit. Keep the headset on the base and don\'t unplug anything.', 'I understand, start', true)) return;
+      if (await act(() => api('recover_headset_mcu'))) { $$('.jobst').forEach(s => s.hidden = false); jobWatch(); }
+    };
     $('#mt-fb').onclick = () => run('fix-base', 'Fix base radio chip', "The base station's radio chip firmware is reinstalled. Takes about a minute. Don't unplug the base.");
     $('#mt-fh').onclick = () => run('fix-headset', 'Fix headset radio chip', "Put the headset on the base and keep it there. The headset's radio chip firmware is reinstalled over the air, about 2 minutes.");
     $('#bk-save').onclick = async () => {
